@@ -1,0 +1,159 @@
+---
+title: "Practical Machine Learning Project"
+author: "faeez safedien"
+date: "June 22, 2018"
+output:
+  html_document: 
+    keep_md: yes
+  pdf_document: default
+---
+
+## Executive Summary
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it.
+
+In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: HAR [http://groupware.les.inf.puc-rio.br/har] (see the section on the Weight Lifting Exercise Dataset).
+
+## Libraries
+We use the lattice, ggplot2, plyr and libraries
+```{r}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE, message=FALSE, fig.width=10, fig.height=5)
+options(width=120)
+
+library(lattice)
+library(ggplot2)
+library(plyr)
+library(randomForest)
+library(knitr)
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(rattle)
+library(corrplot)
+set.seed(112233)
+```
+
+## Download the Data
+```{r}
+trainUrl <-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+trainFile <- "./data/pml-training.csv"
+testFile  <- "./data/pml-testing.csv"
+if (!file.exists("./data")) {
+  dir.create("./data")
+}
+if (!file.exists(trainFile)) {
+  download.file(trainUrl, destfile=trainFile, method="curl")
+}
+if (!file.exists(testFile)) {
+  download.file(testUrl, destfile=testFile, method="curl")
+}
+```
+
+## Read the Data
+We read the csv files into data frames
+```{r}
+train <- read.csv(trainFile)
+test <- read.csv(testFile)
+dim(train)
+dim(test)
+```
+
+## Clean the Data
+The training data will be partioned in order to Training set fro the modelling process and a Test set for validation, the split will be 70%-Training and 30%-Test. The original testing data will be used for the quiz.
+```{r}
+#remove variables with variance close to zero
+smallVar <- nearZeroVar(train)
+cleanedTrain <- train[, -smallVar]
+cleanedTest <- test[, -smallVar]
+dim(cleanedTrain)
+
+#remove values that are mostly NA
+mostlyNA <- sapply(cleanedTrain, function(x) mean(is.na(x))) > 0.95
+cleanedTrain <- cleanedTrain[, mostlyNA == FALSE]
+cleanedTest <- cleanedTest[, mostlyNA == FALSE]
+dim(cleanedTrain)
+
+# the first five variables (X, user_name, raw_timestamp_part_1, raw_timestamp_part_2, cvtd_timestamp) aren't needed to make a prediction and are removed
+cleanedTrain <- cleanedTrain[, -(1:5)]
+cleanedTest <- cleanedTest[, -(1:5)]
+dim(cleanedTrain)
+
+## partition the training dat to train the model
+inTrain <- createDataPartition(cleanedTrain$classe, p=0.7, list = FALSE)
+TrainSet <- cleanedTrain[inTrain, ]
+TestSet <- cleanedTrain[-inTrain, ]
+dim(TrainSet)
+dim(TestSet)
+```
+
+## Correlation Analysis
+Before building the model the correlation between variables in analysed
+```{r}
+corMatrix <- cor(TrainSet[, -54])
+corrplot(corMatrix, order="FPC", method = "color", type = "lower", tl.cex = 0.8, tl.col = rgb(0,0,0))
+```
+The dark shades represent pairs of highly correlated varibles. Since the aren't that many we won't perform Principal Components Analysis to further reduced the variables.
+
+## Prediction Model Building
+We will test 3 different models: Classification Trees, Random Forest and Gradient Descent.
+
+Cross Validation is used for efficiency and to limit the effect of overfitting. We will use 5 folds
+```{r}
+trControl <- trainControl(method="cv", number=5, verboseIter = FALSE)
+```
+
+### Classification Trees
+```{r}
+# fit model
+set.seed(112233)
+modDT <- train(classe ~ ., data=TrainSet, method="rpart", trControl=trControl)
+fancyRpartPlot(modDT$finalModel)
+
+#prediction
+predDT <- predict(modDT, newdata=TestSet)
+ConfMatrixDT <- confusionMatrix(predDT, TestSet$classe)
+ConfMatrixDT
+```
+
+### Random Forest
+```{r}
+# fit model
+set.seed(112233)
+modRF<- train(classe ~ ., data=TrainSet, method="rf", trControl=trControl)
+modRF$finalModel
+
+# prediction
+predRF <- predict(modRF, newdata=TestSet)
+ConfMatrixRF <- confusionMatrix(predRF, TestSet$classe)
+ConfMatrixRF
+```
+
+### Generalised Boosted Model
+```{r}
+# fit model
+set.seed(112233)
+modGBM <- train(classe ~ ., data=TrainSet, method="gbm", trControl=trControl)
+modGBM$finalModel
+
+# prediction
+predGBM <- predict(modGBM, newdata=TestSet)
+ConfMatrixGBM <- confusionMatrix(predGBM, TestSet$classe)
+ConfMatrixGBM
+```
+
+## Model Selection
+The accuracy of the three models are as follows:
+* Classification Trees, 0.5181
+* Random Forest, 0.9994
+*GBM, 0.9878
+The Random Forest will we used for the quiz with the testing data set (with reduced variables).
+
+Before predicting on the test set the model will be retrained on the full training set (cleanedTrain) in order to improve accuracy.
+```{r}
+# retrain the model
+modFinal <- train(classe ~ ., data=cleanedTrain, method="rf", trControl=trControl)
+
+# predict the results from the test set
+predTest <- predict(modFinal, newdata=cleanedTest)
+predTest
+```
